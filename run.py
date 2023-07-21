@@ -1,50 +1,73 @@
-from typing import Dict, List
-from pathlib import Path
 import csv
 import logging
+import tempfile
+from pathlib import Path
+from typing import Dict, List
 
+from hdx.api.configuration import Configuration
 from hdx.data.dataset import Dataset
 from hdx.data.resource import Resource
+from hdx.utilities.path import get_uuid
 
 from hdro import get_country_data
 
 logger = logging.getLogger(__name__)
 
 _LOOKUP = "hdx-scraper-hdro"
+_PROJECT_CONFIG = Path("config") / "project_configuration.yaml"
+# TODO: are these the same for every project? Where should they be set?
+_MAINTAINER = "196196be-6037-4488-8b71-d786adf4c081"
+_ORGANIZATION = "647d9d8c-4cac-4c33-b639-649aad1c2893"
 
 
-def main():
+def _main():
     # Setup
-    folder = Path(_LOOKUP)
-    # Get the data from the API
+    config = Configuration(
+        user_agent_lookup=_LOOKUP, project_config_yaml=_PROJECT_CONFIG
+    )
+    batch = get_uuid()
+    # Get the data from the API - takes awhile to loop through all countries
     country_dict = get_country_data()
     # Now loop through each country and create the datasets
     for country_iso3, country_data in country_dict.items():
+        # Get the start and end date of the dataset
+        # TODO - as well, copy the other metadata
         # Create a dataset
-        name = f"hdro-{country_iso3}"
-        dataset = get_dataset(title=name, tags=["development indicator"], name=name)
-        # Add the resource
-        resource = generate_resource_from_dict(
-            dataset=dataset,
-            folder=folder,
-            filename=f"hdro-{country_iso3}.csv",
-            data_json=country_data,
-            resourcedata={"name": name, "title": name},
+        dataset_name = f"hdro-{country_iso3}"
+        dataset = _get_dataset(
+            dataset_title=dataset_name,
+            dataset_name=dataset_name,
+            tags=config.read()["tags"],
         )
+        # Add the resource
+        with tempfile.TemporaryDirectory as tempdir:
+            _generate_resource_from_dict(
+                dataset=dataset,
+                folder=tempdir,
+                filename=f"hdro-{country_iso3}.csv",
+                data_json=country_data,
+                resourcedata={"name": dataset_name, "title": dataset_name},
+            )
+            dataset.create_in_hdx(
+                remove_additional_resources=True,
+                hxl_update=False,
+                updated_by_script="HDX Scraper: HDRO",
+                batch=batch,
+            )
 
 
-def get_dataset(title: str, tags: List, name):
-    logger.info(f"Creating dataset: {title}")
-    dataset = Dataset({"name": name, "title": title})
-    dataset.set_maintainer("196196be-6037-4488-8b71-d786adf4c081")
-    dataset.set_organization("647d9d8c-4cac-4c33-b639-649aad1c2893")
+def _get_dataset(dataset_title: str, dataset_name: str, tags: List):
+    logger.info(f"Creating dataset: {dataset_title}")
+    dataset = Dataset({"name": dataset_name, "title": dataset_title})
+    dataset.set_maintainer(_MAINTAINER)
+    dataset.set_organization(_ORGANIZATION)
     dataset.set_expected_update_frequency("Every year")
     dataset.set_subnational(False)
     dataset.add_tags(tags)
     return dataset
 
 
-def generate_resource_from_dict(
+def _generate_resource_from_dict(
     dataset: Dataset,
     folder: Path,
     filename: str,
@@ -67,6 +90,7 @@ def generate_resource_from_dict(
     """
     filepath = folder / filename
     with open(filepath, "w") as f:
+        # TODO: this is not going to work if we want to add a HXL row
         writer = csv.DictWriter(f, fieldnames=data_json[0])
         writer.writeheader()
         writer.writerows(data_json)
@@ -78,4 +102,4 @@ def generate_resource_from_dict(
 
 
 if __name__ == "__main__":
-    main()
+    _main()
